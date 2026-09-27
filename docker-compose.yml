@@ -1,0 +1,181 @@
+services:
+
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: data-platform-minio
+
+    command: server /data --console-address ":9001"
+
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: adminadmin
+
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+    volumes:
+      - minio_data:/data
+
+    networks:
+      - data-platform
+
+
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: data-platform-kafka
+
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+    ports:
+      - "9092:9092"
+
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+    networks:
+      - data-platform
+
+
+  debezium:
+    image: debezium/connect:3.0.0.Final
+    container_name: data-platform-debezium
+
+    depends_on:
+      - kafka
+
+    ports:
+      - "8083:8083"
+
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: debezium_configs
+      OFFSET_STORAGE_TOPIC: debezium_offsets
+      STATUS_STORAGE_TOPIC: debezium_status
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+    networks:
+      - data-platform
+
+
+  spark:
+    image: apache/spark:4.1.3
+    container_name: data-platform-spark
+
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+
+    volumes:
+      - ./spark:/opt/spark-apps
+
+    command: >
+      bash -c "
+        /opt/spark/sbin/start-master.sh &&
+        tail -f /dev/null
+      "
+
+    networks:
+      - data-platform
+
+
+  airflow:
+    image: apache/airflow:2.10.5
+    container_name: data-platform-airflow
+
+    ports:
+      - "8081:8080"
+
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+      AIRFLOW_ADMIN_USERNAME: admin
+      AIRFLOW_ADMIN_PASSWORD: admin
+
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - airflow_data:/opt/airflow
+
+    command: >
+      bash -c "
+        airflow db migrate &&
+        airflow users create
+          --username admin
+          --password admin
+          --firstname Admin
+          --lastname Admin
+          --role Admin
+          --email admin@example.com || true &&
+        airflow standalone
+      "
+
+    networks:
+      - data-platform
+
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    container_name: data-platform-prometheus
+
+    ports:
+      - "9090:9090"
+
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+
+    networks:
+      - data-platform
+
+
+  loki:
+    image: grafana/loki:latest
+    container_name: data-platform-loki
+
+    ports:
+      - "3100:3100"
+
+    volumes:
+      - loki_data:/loki
+
+    command: -config.file=/etc/loki/local-config.yaml
+
+    networks:
+      - data-platform
+
+
+volumes:
+  minio_data:
+  kafka_data:
+  airflow_data:
+  prometheus_data:
+  loki_data:
+
+
+
+networks:
+  data-platform:
+    driver: bridge

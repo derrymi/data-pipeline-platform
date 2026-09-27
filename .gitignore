@@ -1,0 +1,6 @@
+# Airflow
+airflow/logs/
+airflow/airflow.db
+
+# Environment
+.env
