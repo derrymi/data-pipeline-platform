@@ -1,6 +1,24 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+
 # Airflow
 airflow/logs/
 airflow/airflow.db
 
+# Spark
+spark/checkpoints/
+
 # Environment
 .env
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local backups
+docker-compose.backup.yml

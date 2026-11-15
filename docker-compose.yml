@@ -1,21 +1,51 @@
 services:
 
-  minio:
-    image: quay.io/minio/minio:latest
-    container_name: data-platform-minio
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    container_name: data-platform-seaweedfs
+    command: mini -dir=/data
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: data-lake
+    ports:
+      - "8333:8333"
+      - "9333:9333"
+    volumes:
+      - seaweedfs_data:/data
+    networks:
+      - data-platform
 
-    command: server /data --console-address ":9001"
+
+  postgres:
+    image: postgres:17
+    container_name: data-platform-postgres
 
     environment:
-      MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: adminadmin
+      POSTGRES_DB: datapipeline
+      POSTGRES_USER: pipeline_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
 
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "5432:5432"
 
     volumes:
-      - minio_data:/data
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline_user -d datapipeline"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
     networks:
       - data-platform
@@ -76,6 +106,11 @@ services:
   spark:
     image: apache/spark:4.1.3
     container_name: data-platform-spark
+    hostname: spark
+
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
 
     ports:
       - "8080:8080"
@@ -95,7 +130,10 @@ services:
 
 
   airflow:
-    image: apache/airflow:2.10.5
+    build:
+      context: ./airflow
+
+    image: data-platform-airflow:2.10.5
     container_name: data-platform-airflow
 
     ports:
@@ -108,26 +146,23 @@ services:
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
       AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
       AIRFLOW_ADMIN_USERNAME: admin
-      AIRFLOW_ADMIN_PASSWORD: admin
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
 
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/logs:/opt/airflow/logs
       - ./airflow/plugins:/opt/airflow/plugins
       - airflow_data:/opt/airflow
+      - /var/run/docker.sock:/var/run/docker.sock
 
-    command: >
-      bash -c "
-        airflow db migrate &&
-        airflow users create
-          --username admin
-          --password admin
-          --firstname Admin
-          --lastname Admin
-          --role Admin
-          --email admin@example.com || true &&
-        airflow standalone
-      "
+    command:
+      - bash
+      - -c
+      - |
+        airflow db migrate
+        airflow users create --username admin --password "$${AIRFLOW_ADMIN_PASSWORD}" --firstname Admin --lastname User --role Admin --email admin@example.com || true
+        airflow scheduler &
+        exec airflow webserver --port 8080
 
     networks:
       - data-platform
@@ -168,11 +203,12 @@ services:
 
 
 volumes:
-  minio_data:
+  seaweedfs_data:
   kafka_data:
   airflow_data:
   prometheus_data:
   loki_data:
+  postgres_data:
 
 
 
